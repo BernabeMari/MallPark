@@ -1,0 +1,245 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mall Parking</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f5f5f5; }
+    .container { max-width:900px; margin:20px auto; background:#fff; padding:20px; border-radius:10px; box-shadow:0 2px 10px rgba(0,0,0,.1); }
+    .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+    .grid { display:grid; gap:16px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+    .spot { border:2px solid #ddd; border-radius:10px; padding:12px; text-align:center; }
+    .slot { position:relative; width:100%; aspect-ratio: 1 / 1; border-radius:8px; background:linear-gradient(180deg, #f9fafb, #eef1f4); overflow:hidden; border:1px dashed #cbd5e1; }
+    .slot-label { position:absolute; top:6px; left:8px; font-size:12px; color:#475569; }
+    .slot-inner { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
+    .car-img { width:70%; max-width:110px; opacity:0; animation:fadeIn 400ms ease-out forwards, bob 2.4s ease-in-out 400ms infinite; filter: drop-shadow(0 6px 8px rgba(0,0,0,.15)); }
+    .reserved-badge { position:absolute; inset:auto 8px 8px auto; background:#ffc107; color:#111; font-weight:bold; font-size:14px; padding:6px 10px; border-radius:999px; box-shadow:0 2px 8px rgba(0,0,0,.15); display:flex; align-items:center; gap:6px; opacity:0; animation:fadeIn 250ms ease-out forwards, pulse 1.6s ease-in-out 250ms infinite; }
+    .reserved-dot { width:8px; height:8px; border-radius:50%; background:#111; opacity:.4; }
+    .reserve-text { letter-spacing:.5px; }
+    .muted { color:#64748b; font-size:12px; margin-top:8px; }
+    .disabled { opacity:.5; cursor:not-allowed; }
+
+    @keyframes fadeIn { from { opacity:0; transform:translateY(8px) scale(.98); } to { opacity:1; transform:translateY(0) scale(1); } }
+    @keyframes bob { 0%, 100% { transform:translateY(0); } 50% { transform:translateY(-4px); } }
+    @keyframes pulse { 0%, 100% { box-shadow:0 0 0 0 rgba(255,193,7,.0); } 50% { box-shadow:0 0 0 8px rgba(255,193,7,.15); } }
+    @keyframes modalSlideIn { from { opacity:0; transform:translateY(-20px) scale(.95); } to { opacity:1; transform:translateY(0) scale(1); } }
+    
+    button { padding:8px 12px; border:none; border-radius:6px; cursor:pointer; transition:all 0.2s ease; }
+    button:hover { transform:translateY(-1px); box-shadow:0 2px 8px rgba(0,0,0,.15); }
+    .reserve { background:#007bff; color:#fff; }
+    .reserve:hover { background:#0056b3; }
+    .cancel { background:#6c757d; color:#fff; }
+    .cancel:hover { background:#545b62; }
+    
+    /* Modal animations */
+    .modal-content { animation: modalSlideIn 0.3s ease-out; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <h2>Parking</h2>
+      <div>
+        <a href="/logout">Logout</a>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:12px; align-items:flex-end; margin-bottom:16px; flex-wrap:wrap;">
+      <div>
+        <label for="arrival" style="display:block; font-size:12px; color:#475569; margin-bottom:6px;">Estimated arrival</label>
+        <input id="arrival" type="datetime-local" style="padding:8px 10px; border:1px solid #cbd5e1; border-radius:6px;">
+      </div>
+      <button id="reserveAny" class="reserve">Reserve</button>
+      <button id="imHereBtn" class="reserve">I'm here</button>
+    </div>
+
+    <div id="grid" class="grid"></div>
+    
+    <!-- Reserve confirmation modal -->
+    <div id="reserveModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); align-items:center; justify-content:center; z-index:1000;">
+      <div class="modal-content" style="background:#fff; padding:24px; border-radius:12px; width:400px; max-width:90vw; box-shadow:0 4px 20px rgba(0,0,0,.3);">
+        <h3 style="margin-top:0; color:#1f2937; font-size:20px;">Confirm Reservation</h3>
+        <div style="margin:16px 0; line-height:1.6; color:#4b5563;">
+          <p style="margin:0 0 12px;">Are you sure you want to reserve a parking spot?</p>
+          <div style="background:#fef3c7; border:1px solid #f59e0b; border-radius:8px; padding:12px; margin:12px 0;">
+            <div style="display:flex; align-items:center; margin-bottom:8px;">
+              <span style="font-size:18px; margin-right:8px;">⚠️</span>
+              <strong style="color:#92400e;">Important Rules:</strong>
+            </div>
+            <ul style="margin:0; padding-left:20px; color:#92400e; font-size:14px;">
+              <li>You must arrive within <strong>10 minutes</strong> of your reservation time</li>
+              <li>Late arrivals will lose their reservation</li>
+              <li>You'll receive the next available card in sequence</li>
+            </ul>
+          </div>
+        </div>
+        <div style="display:flex; gap:12px; justify-content:flex-end; margin-top:20px;">
+          <button id="reserveCancelBtn" class="cancel" style="padding:10px 20px;">Cancel</button>
+          <button id="reserveConfirmBtn" class="reserve" style="padding:10px 20px;">Yes, Reserve</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- I'm here confirmation modal -->
+    <div id="imHereModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); align-items:center; justify-content:center; z-index:1000;">
+      <div class="modal-content" style="background:#fff; padding:24px; border-radius:12px; width:400px; max-width:90vw; box-shadow:0 4px 20px rgba(0,0,0,.3);">
+        <h3 style="margin-top:0; color:#1f2937; font-size:20px;">Confirm Arrival</h3>
+        <div style="margin:16px 0; line-height:1.6; color:#4b5563;">
+          <p style="margin:0 0 12px;">Are you ready to enter the parking area?</p>
+          <div style="background:#dbeafe; border:1px solid #3b82f6; border-radius:8px; padding:12px; margin:12px 0;">
+            <div style="display:flex; align-items:center; margin-bottom:8px;">
+              <span style="font-size:18px; margin-right:8px;">🚗</span>
+              <strong style="color:#1e40af;">Before you proceed:</strong>
+            </div>
+            <ul style="margin:0; padding-left:20px; color:#1e40af; font-size:14px;">
+              <li>Make sure you are <strong>in front of the gate</strong></li>
+              <li>The gate will open automatically when you confirm</li>
+              <li>You'll receive your assigned parking card</li>
+            </ul>
+          </div>
+        </div>
+        <div style="display:flex; gap:12px; justify-content:flex-end; margin-top:20px;">
+          <button id="imHereCancelBtn" class="cancel" style="padding:10px 20px;">Not Yet</button>
+          <button id="imHereConfirmBtn" class="reserve" style="padding:10px 20px;">I'm Ready</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let pendingReserveId = null;
+    let myAssignedId = null;
+    const CAR_IMG_URL = "{{ url_for('assets', filename='images/car.png') }}";
+
+    async function fetchSpots() {
+      const r = await fetch('/api/spots');
+      const data = await r.json();
+      renderSpots(data.spots);
+    }
+
+    function formatDuration(seconds) {
+      if (!seconds || seconds < 0) return '';
+      const m = Math.floor(seconds / 60);
+      const s = Math.floor(seconds % 60);
+      return `${m}m ${s}s`;
+    }
+
+    function renderSpots(spots) {
+      const grid = document.getElementById('grid');
+      grid.innerHTML = '';
+      spots.forEach(s => {
+        const div = document.createElement('div');
+        div.className = 'spot';
+        const since = s.reserved_at ? Math.max(0, Math.floor(Date.now()/1000 - s.reserved_at)) : null;
+
+        // Build the visual slot with overlays
+        let overlays = '';
+        if (s.state === 'X') {
+          overlays += `<img class="car-img" alt="Car" src="${CAR_IMG_URL}">`;
+        } else if (s.state === 'R') {
+          overlays += `
+            <div class="reserved-badge" title="Reserved${since ? ' · ' + formatDuration(since) : ''}">
+              <span class="reserved-dot"></span>
+              <span class="reserve-text">Reserved</span>
+            </div>
+          `;
+        }
+
+        div.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div style="font-weight:600; color:#334155;">Spot ${s.id}</div>
+            <div></div>
+          </div>
+          <div class="slot">
+            <div class="slot-label">P${s.id}</div>
+            <div class="slot-inner">${overlays}</div>
+          </div>
+          ${s.state === 'R' ? `<div class="muted">Reserved ${since ? '(' + formatDuration(since) + ')' : ''}</div>` : ''}
+          <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;"></div>
+        `;
+        grid.appendChild(div);
+      });
+
+      // Update assignment UI
+      const me = spots.find(s => s.reserved_by_me);
+      myAssignedId = me ? me.id : null;
+    }
+
+    // Modal functions
+    function showModal(modalId) {
+      document.getElementById(modalId).style.display = 'flex';
+    }
+
+    function hideModal(modalId) {
+      document.getElementById(modalId).style.display = 'none';
+    }
+
+    // Reserve button - show confirmation modal
+    document.getElementById('reserveAny').onclick = () => {
+      showModal('reserveModal');
+    };
+
+    // Reserve confirmation
+    document.getElementById('reserveConfirmBtn').onclick = async () => {
+      hideModal('reserveModal');
+      const input = document.getElementById('arrival').value;
+      let arrivalTs = 0;
+      if (input) {
+        const dt = new Date(input);
+        if (!isNaN(dt.getTime())) arrivalTs = Math.floor(dt.getTime()/1000);
+      }
+      const r = await fetch('/api/reserve', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ arrival_ts: arrivalTs }) });
+      const data = await r.json();
+      if (!data.success) {
+        alert(data.message || 'Unable to reserve');
+      } else {
+        alert('Reserved! We\'ll hold a slot for you.');
+      }
+      fetchSpots();
+    };
+
+    // Reserve cancel
+    document.getElementById('reserveCancelBtn').onclick = () => {
+      hideModal('reserveModal');
+    };
+
+    // I'm here button - show confirmation modal
+    document.getElementById('imHereBtn').onclick = () => {
+      showModal('imHereModal');
+    };
+
+    // I'm here confirmation
+    document.getElementById('imHereConfirmBtn').onclick = async () => {
+      hideModal('imHereModal');
+      const r = await fetch('/api/imhere', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({}) });
+      const data = await r.json();
+      if (!data.success) {
+        alert(data.message || "Couldn't open entry");
+      } else {
+        alert('Gate opening! Please proceed to your assigned spot.');
+      }
+      fetchSpots();
+    };
+
+    // I'm here cancel
+    document.getElementById('imHereCancelBtn').onclick = () => {
+      hideModal('imHereModal');
+    };
+
+    // Close modals when clicking outside
+    document.getElementById('reserveModal').onclick = (e) => {
+      if (e.target.id === 'reserveModal') hideModal('reserveModal');
+    };
+
+    document.getElementById('imHereModal').onclick = (e) => {
+      if (e.target.id === 'imHereModal') hideModal('imHereModal');
+    };
+
+    fetchSpots();
+    setInterval(fetchSpots, 3000);
+  </script>
+</body>
+</html>
+
+
