@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verify Email</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f5f5f5; }
+    .card { max-width:400px; margin:60px auto; background:#fff; padding:30px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.1); }
+    .title { text-align:center; margin-bottom:20px; color:#1f2937; }
+    .subtitle { text-align:center; margin-bottom:20px; color:#6b7280; font-size:14px; }
+    .email-display { background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px; padding:12px; text-align:center; margin-bottom:20px; font-weight:600; color:#495057; }
+    input { width:100%; padding:12px; margin:8px 0; border:1px solid #ddd; border-radius:6px; font-size:16px; text-align:center; letter-spacing:2px; }
+    input:focus { outline:none; border-color:#007bff; box-shadow:0 0 0 2px rgba(0,123,255,.25); }
+    button { width:100%; padding:12px; background:#007bff; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:16px; margin-top:10px; }
+    button:hover { background:#0056b3; }
+    .error { color:#dc3545; margin:8px 0; text-align:center; background:#f8d7da; padding:10px; border-radius:4px; border:1px solid #f5c6cb; }
+    .link { text-align:center; margin-top:15px; }
+    .link a { color:#007bff; text-decoration:none; }
+    .link a:hover { text-decoration:underline; }
+    .info-box { background:#fff3cd; border:1px solid #ffeaa7; border-radius:6px; padding:15px; margin-bottom:20px; }
+    .info-box p { margin:0; color:#856404; font-size:14px; }
+    .resend { text-align:center; margin-top:15px; }
+    .resend a { color:#6c757d; text-decoration:none; font-size:14px; }
+    .resend a:hover { text-decoration:underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2 class="title">Verify Your Email</h2>
+    <p class="subtitle">We've sent a 4-digit verification code to:</p>
+    
+    <div class="email-display">{{ email }}</div>
+    
+    {% if message %}
+    <div class="info-box">
+      <p><strong>Info:</strong> {{ message }}</p>
+    </div>
+    {% endif %}
+    
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+    
+    <div class="info-box">
+      <p><strong>Important:</strong> The verification code will expire in 10 minutes. Please check your email and enter the code below.</p>
+    </div>
+    
+    <form method="post" action="/verify_email">
+      <input type="hidden" name="email" value="{{ email }}">
+      <input type="text" name="code" placeholder="Enter 4-digit code" maxlength="4" pattern="[0-9]{4}" required>
+      <button type="submit">Verify Code</button>
+    </form>
+    
+    <div class="resend">
+      <a href="/create_password">Didn't receive the code? Try again</a>
+      <br>
+      <a href="#" onclick="resendCode()" style="margin-top: 10px; display: inline-block;">Resend Code</a>
+    </div>
+    
+    <div class="link">
+      <a href="/login">Back to Login</a>
+    </div>
+  </div>
+
+  <script>
+    // Auto-focus on code input
+    document.querySelector('input[name="code"]').focus();
+    
+    // Auto-submit when 4 digits are entered
+    document.querySelector('input[name="code"]').addEventListener('input', function(e) {
+      if (e.target.value.length === 4) {
+        e.target.form.submit();
+      }
+    });
+    
+    // Resend code function
+    function resendCode() {
+      const email = '{{ email }}';
+      if (confirm('Are you sure you want to resend the verification code?')) {
+        // Create a form and submit it to resend the code
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/resend_verification';
+        
+        const emailInput = document.createElement('input');
+        emailInput.type = 'hidden';
+        emailInput.name = 'email';
+        emailInput.value = email;
+        
+        form.appendChild(emailInput);
+        document.body.appendChild(form);
+        form.submit();
+      }
+    }
+  </script>
+</body>
+</html>

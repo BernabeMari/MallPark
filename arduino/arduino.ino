@@ -5,10 +5,6 @@
 #include <Tiny4kOLED.h>
 
 // ============================
-// OLED Settings - Using Tiny4kOLED
-// ============================
-
-// ============================
 // Pin Setup
 // ============================
 #define BUTTON_PIN 4
@@ -50,6 +46,15 @@ uint8_t validCards[][4] = {
 int numCards = 4;
 
 // ============================
+// VIP RFID System
+// ============================
+String reservedRFIDs[10];
+String reservedCustomers[10];
+int numReservedRFIDs = 0;
+String lastScannedRFID = "";
+unsigned long lastRFIDScanTime = 0;
+
+// ============================
 // Variables
 // ============================
 bool counting[4] = {false, false, false, false};
@@ -57,18 +62,18 @@ unsigned long startTime[4] = {0, 0, 0, 0};
 int paymentDue[4] = {0, 0, 0, 0};
 int coinsInserted[4] = {0, 0, 0, 0};
 int currentPayingIndex = -1;
-char slotStatus[4] = {'O', 'O', 'O', 'O'}; // O=open, X=occupied, R=reserved
-bool oledAvailable = true;
+char slotStatus[4] = {'O', 'O', 'O', 'O'};
+bool oledAvailable = false;
 bool awaitingPayment[4] = {false, false, false, false};
-bool reservedStatus[4] = {false, false, false, false}; // reservation overlay from host
-int capacityHold = 0; // number of cards to hold back for reservations
+bool reservedStatus[4] = {false, false, false, false};
+int capacityHold = 0;
 
 // ============================
-// Card dispense queue (0..3)
+// Card dispense queue
 // ============================
 int availableQueue[4] = {0, 1, 2, 3};
-int queueHead = 0;  // index of next item to pop
-int queueSize = 4;  // number of items present
+int queueHead = 0;
+int queueSize = 4;
 
 int popNextCardFromQueue() {
   if (queueSize == 0) return -1;
@@ -79,7 +84,7 @@ int popNextCardFromQueue() {
 }
 
 void pushReturnedCardToQueue(int idx) {
-  if (queueSize >= 4) return; // should not happen
+  if (queueSize >= 4) return;
   int insertPos = (queueHead + queueSize) % 4;
   availableQueue[insertPos] = idx;
   queueSize++;
@@ -96,33 +101,11 @@ void removeCardFromQueueIfPresent(int idx) {
       newQueue[newSize++] = val;
     }
   }
-  // write back
   for (int k = 0; k < newSize; k++) {
     availableQueue[k] = newQueue[k];
   }
   queueHead = 0;
   queueSize = newSize;
-}
-
-// ============================
-// I2C Scanner (debug aid)
-// ============================
-void scanI2C() {
-  Serial.println("Scanning I2C bus...");
-  byte count = 0;
-  for (byte address = 1; address < 127; address++) {
-    Wire.beginTransmission(address);
-    byte error = Wire.endTransmission();
-    if (error == 0) {
-      Serial.print("I2C device found at 0x");
-      if (address < 16) Serial.print("0");
-      Serial.println(address, HEX);
-      count++;
-    }
-  }
-  if (count == 0) {
-    Serial.println("No I2C devices found");
-  }
 }
 
 // ============================
@@ -149,18 +132,17 @@ long getDistance(int trig, int echo) {
 }
 
 // ============================
-// Serial Commands (host -> MCU)
+// Serial Commands
 // ============================
 void readHostCommands() {
-  // Expected format: RESV:O,R,O,O\n
   while (Serial.available()) {
     String line = Serial.readStringUntil('\n');
     line.trim();
+    
     if (line.startsWith("RESV:")) {
       String payload = line.substring(5);
-      Serial.print("Received RESV: ");
+      Serial.print(F("Received RESV: "));
       Serial.println(payload);
-      int idx = 0;
       for (int i = 0; i < 4; i++) {
         int comma = payload.indexOf(',');
         String token;
@@ -174,8 +156,8 @@ void readHostCommands() {
         if (comma == -1) break;
         payload.remove(0, comma + 1);
       }
-    } else if (line.startsWith("START:")) {
-      // START:1..4 -> begin counting for that spot/card (1-based index)
+    } 
+    else if (line.startsWith("START:")) {
       String idxStr = line.substring(6);
       idxStr.trim();
       int oneBased = idxStr.toInt();
@@ -184,32 +166,29 @@ void readHostCommands() {
         if (!counting[i] && !awaitingPayment[i]) {
           counting[i] = true;
           startTime[i] = millis();
-          // Ensure the assigned card is removed from the dispense queue
           removeCardFromQueueIfPresent(i);
-          Serial.print("Started timer for Card ");
+          Serial.print(F("Started timer for Card "));
           Serial.println(i + 1);
         }
       }
-    } else if (line.startsWith("HERE:")) {
-      // HERE:1..4 -> reserved user arrived, assign next card in queue (same as walk-ins)
+    } 
+    else if (line.startsWith("HERE:")) {
       String idxStr = line.substring(5);
       idxStr.trim();
       int oneBased = idxStr.toInt();
-      Serial.print("HERE command for slot ");
+      Serial.print(F("HERE command for slot "));
       Serial.println(oneBased);
+      
       if (oneBased >= 1 && oneBased <= 4) {
-        // For reserved users, use same sequential queue logic as walk-ins
         int allowedAvailable = queueSize - capacityHold;
         if (allowedAvailable <= 0) {
-          Serial.println("No available card/slot (capacity held) for reserved user.");
+          Serial.println(F("No available card/slot (capacity held) for reserved user."));
         } else {
-          // Skip indices that are reserved/held by host (reservedStatus[i])
           int nextCard = -1;
           for (int attempt = 0; attempt < 4; attempt++) {
             int candidate = popNextCardFromQueue();
             if (candidate == -1) break;
             if (reservedStatus[candidate]) {
-              // Put back to end of queue as it's held
               pushReturnedCardToQueue(candidate);
               continue;
             }
@@ -221,48 +200,96 @@ void readHostCommands() {
             counting[nextCard] = true;
             startTime[nextCard] = millis();
 
-            Serial.print("Assigned next card ");
+            Serial.print(F("Assigned next card "));
             Serial.print(nextCard + 1);
-            Serial.println(" to reserved user");
+            Serial.println(F(" to reserved user"));
             
-            // Report card dispensed to server for queue sync
-            Serial.print("DISP:");
+            Serial.print(F("DISP:"));
             Serial.println(nextCard + 1);
 
-            Serial.println("Dispensing card and opening gate...");
-            // Dispense card for reserved user
+            Serial.println(F("Dispensing card and opening gate..."));
             dispenserServo.write(90);
             delay(700);
             dispenserServo.write(0);
 
-            // Open entry gate
             entryServo.write(90);
             delay(5000);
             entryServo.write(0);
-            Serial.println("Gate closed.");
+            Serial.println(F("Gate closed."));
           } else {
-            Serial.println("No available card/slot for reserved user");
+            Serial.println(F("No available card/slot for reserved user"));
           }
         }
-      } else {
-        Serial.println("Invalid slot number");
       }
-    } else if (line.startsWith("CAP:")) {
-      // CAP:n -> hold back last n cards for reservations
+    } 
+    else if (line.startsWith("CAP:")) {
       String num = line.substring(4);
       num.trim();
       int n = num.toInt();
       if (n < 0) n = 0;
       if (n > 4) n = 4;
       capacityHold = n;
-      Serial.print("Capacity hold set to ");
+      Serial.print(F("Capacity hold set to "));
       Serial.println(capacityHold);
+    } 
+    else if (line.startsWith("RFID:")) {
+      String payload = line.substring(5);
+      Serial.print(F("Received VIP RFID data: "));
+      Serial.println(payload);
+      
+      numReservedRFIDs = 0;
+      
+      int start = 0;
+      int comma = payload.indexOf(',');
+      while (comma != -1 && numReservedRFIDs < 10) {
+        String pair = payload.substring(start, comma);
+        pair.trim();
+        if (pair.length() > 0) {
+          int colon = pair.indexOf(':');
+          if (colon != -1) {
+            String rfid = pair.substring(0, colon);
+            String email = pair.substring(colon + 1);
+            rfid.trim();
+            email.trim();
+            if (rfid.length() > 0 && email.length() > 0) {
+              reservedRFIDs[numReservedRFIDs] = rfid;
+              reservedCustomers[numReservedRFIDs] = email;
+              numReservedRFIDs++;
+            }
+          }
+        }
+        start = comma + 1;
+        comma = payload.indexOf(',', start);
+      }
+      
+      if (start < payload.length() && numReservedRFIDs < 10) {
+        String pair = payload.substring(start);
+        pair.trim();
+        if (pair.length() > 0) {
+          int colon = pair.indexOf(':');
+          if (colon != -1) {
+            String rfid = pair.substring(0, colon);
+            String email = pair.substring(colon + 1);
+            rfid.trim();
+            email.trim();
+            if (rfid.length() > 0 && email.length() > 0) {
+              reservedRFIDs[numReservedRFIDs] = rfid;
+              reservedCustomers[numReservedRFIDs] = email;
+              numReservedRFIDs++;
+            }
+          }
+        }
+      }
+      
+      Serial.print(F("Loaded "));
+      Serial.print(numReservedRFIDs);
+      Serial.println(F(" VIP RFID cards"));
     }
   }
 }
 
 // ============================
-// OLED Update Function - Display Payment Info ONLY
+// OLED Update Function
 // ============================
 void updateOLED() {
   if (!oledAvailable) return;
@@ -271,42 +298,38 @@ void updateOLED() {
   oled.setFont(FONT8X16);
 
   if (currentPayingIndex != -1) {
-    // Show payment info when someone is paying
     int idx = currentPayingIndex;
     int coinsNeeded = paymentDue[idx] / 5;
     int remaining = (coinsNeeded - coinsInserted[idx]) * 5;
     if (remaining < 0) remaining = 0;
 
-    // Each page = 8 pixels, so use y = 0, 2, 4, etc.
-    oled.setCursor(0, 0);   // top line
-    oled.print("Slot ");
+    oled.setCursor(0, 0);
+    oled.print(F("Slot "));
     oled.print(idx + 1);
-    oled.print(" Payment");
+    oled.print(F(" Payment"));
 
-    oled.setCursor(0, 2);   // second line
-    oled.print("Php ");
+    oled.setCursor(0, 2);
+    oled.print(F("Php "));
     oled.print(remaining);
   } else {
-    // Show welcome message when no payment
     oled.setCursor(0, 0);
-    oled.print("Welcome to");
+    oled.print(F("Welcome to"));
     oled.setCursor(0, 2);
-    oled.print("Parking System");
+    oled.print(F("Parking System"));
   }
 }
 
-
 // ============================
-// LCD Update Function - Display Slot Status
+// LCD Update Function
 // ============================
 void updateLCD() {
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("S1:"); lcd.print(slotStatus[0]);
-  lcd.print(" S2:"); lcd.print(slotStatus[1]);
+  lcd.print(F("S1:")); lcd.print(slotStatus[0]);
+  lcd.print(F(" S2:")); lcd.print(slotStatus[1]);
   lcd.setCursor(0, 1);
-  lcd.print("S3:"); lcd.print(slotStatus[2]);
-  lcd.print(" S4:"); lcd.print(slotStatus[3]);
+  lcd.print(F("S3:")); lcd.print(slotStatus[2]);
+  lcd.print(F(" S4:")); lcd.print(slotStatus[3]);
 }
 
 // ============================
@@ -314,6 +337,11 @@ void updateLCD() {
 // ============================
 void setup() {
   Serial.begin(9600);
+  Serial.setTimeout(50); // Reduce timeout for faster response
+  while (!Serial) {
+    ; // Wait for serial port to connect
+  }
+  Serial.println(F("System Starting..."));
 
   // Button & Coin
   pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -334,44 +362,46 @@ void setup() {
   exitServo.write(0);
   dispenserServo.write(0);
 
-  // Initialize I2C before using any I2C devices (LCD, OLED, PN532)
+  // Initialize I2C
   Wire.begin();
-  // Faster I2C for SSD1306 stability
-  #if defined(TWBR)
-    Wire.setClock(400000);
-  #endif
+  Wire.setClock(100000); // Use standard 100kHz for stability
 
-  // Optional: scan to verify addresses (expects 0x27 for LCD and 0x3C/0x3D for OLED)
-  scanI2C();
+  Serial.println(F("I2C initialized"));
 
   // LCD
   lcd.init();
   lcd.backlight();
   lcd.clear();
+  lcd.print(F("Initializing..."));
+  Serial.println(F("LCD initialized"));
 
   // OLED using Tiny4kOLED
   oled.begin();
-  oledAvailable = true;
   oled.clear();
   oled.on();
-  Serial.println("OLED initialized with Tiny4kOLED!");
+  oledAvailable = true;
+  Serial.println(F("OLED initialized"));
 
   // PN532
   nfc.begin();
   uint32_t versiondata = nfc.getFirmwareVersion();
   if (!versiondata) {
     lcd.clear();
-    lcd.print("PN532 not found!");
-    Serial.println("PN532 not detected. Check wiring!");
+    lcd.print(F("PN532 not found!"));
+    Serial.println(F("PN532 not detected!"));
     while (1);
   }
   nfc.SAMConfig();
+  Serial.println(F("PN532 initialized"));
 
-  Serial.println("System Ready.");
+  lcd.clear();
+  lcd.print(F("System Ready"));
+  Serial.println(F("System Ready"));
+  delay(1000);
 }
 
 // ============================
-// Match RFID UID
+// RFID Helper Functions
 // ============================
 int matchCard(uint8_t *uid) {
   for (int i = 0; i < numCards; i++) {
@@ -387,18 +417,101 @@ int matchCard(uint8_t *uid) {
   return -1;
 }
 
+String uidToString(uint8_t* uid, uint8_t uidLength) {
+  String uidStr = "";
+  for (uint8_t i = 0; i < uidLength; i++) {
+    if (uid[i] < 0x10) uidStr += "0";
+    uidStr += String(uid[i], HEX);
+  }
+  uidStr.toUpperCase();
+  return uidStr;
+}
+
+int getReservedCustomerIndex(String rfid) {
+  for (int i = 0; i < numReservedRFIDs; i++) {
+    if (reservedRFIDs[i] == rfid) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+void handleVIPRFIDScan(String rfid) {
+  int customerIndex = getReservedCustomerIndex(rfid);
+  
+  if (customerIndex != -1) {
+    String customerEmail = reservedCustomers[customerIndex];
+    Serial.print(F("VIP RFID: Customer detected - "));
+    Serial.println(customerEmail);
+    Serial.print(F("VIP RFID: Card UID - "));
+    Serial.println(rfid);
+    
+    // Work exactly like button press - dispense next available card
+    int allowedAvailable = queueSize - capacityHold;
+    if (allowedAvailable <= 0) {
+      Serial.println(F("VIP RFID: No available card/slot (capacity held)"));
+      return;
+    }
+    
+    // Get next available card (skip reserved slots)
+    int nextCard = -1;
+    for (int attempt = 0; attempt < 4; attempt++) {
+      int candidate = popNextCardFromQueue();
+      if (candidate == -1) break;
+      if (reservedStatus[candidate]) {
+        pushReturnedCardToQueue(candidate);
+        continue;
+      }
+      nextCard = candidate;
+      break;
+    }
+    
+    if (nextCard != -1) {
+      // Start counting for this card
+      counting[nextCard] = true;
+      startTime[nextCard] = millis();
+
+      Serial.print(F("VIP RFID: Dispensed Card "));
+      Serial.println(nextCard + 1);
+      
+      // Report card dispensed to server
+      Serial.print(F("DISP:"));
+      Serial.println(nextCard + 1);
+
+      // Physically dispense the card
+      Serial.println(F("VIP RFID: Dispensing card..."));
+      dispenserServo.write(90);
+      delay(700);
+      dispenserServo.write(0);
+
+      // Open entry gate
+      Serial.println(F("VIP RFID: Opening gate..."));
+      entryServo.write(90);
+      delay(5000);
+      entryServo.write(0);
+      Serial.println(F("VIP RFID: Gate closed - Service complete"));
+    } else {
+      Serial.println(F("VIP RFID: No available card/slot"));
+    }
+  } else {
+    Serial.print(F("VIP RFID: Unknown card - "));
+    Serial.println(rfid);
+  }
+}
+
 // ============================
 // Main Loop
 // ============================
 void loop() {
-  // === Update slot status from ultrasonic ===
+  // Process incoming commands FIRST (before everything else)
+  readHostCommands();
+  
+  // Update slot status from ultrasonic
   long d1 = getDistance(TRIG1, ECHO1);
   long d2 = getDistance(TRIG2, ECHO2);
   long d3 = getDistance(TRIG3, ECHO3);
   long d4 = getDistance(TRIG4, ECHO4);
 
-  // Apply occupancy based on ultrasonic only; show 'R' while a session
-  // is active (counting or awaitingPayment) or host reservation overlay.
   bool occ0 = (d1 < 15);
   bool occ1 = (d2 < 15);
   bool occ2 = (d3 < 15);
@@ -412,8 +525,8 @@ void loop() {
   updateOLED();
   updateLCD();
 
-  // Report slot occupancy to host as: SLOTS:O,X,O,O\n
-  Serial.print("SLOTS:");
+  // Report slot occupancy
+  Serial.print(F("SLOTS:"));
   Serial.print(slotStatus[0]);
   Serial.print(",");
   Serial.print(slotStatus[1]);
@@ -421,151 +534,141 @@ void loop() {
   Serial.print(slotStatus[2]);
   Serial.print(",");
   Serial.println(slotStatus[3]);
+  Serial.flush(); // Ensure data is sent before continuing
 
-  // Process any incoming reservation updates from host
-  readHostCommands();
-
-  // === ENTRY BUTTON PRESSED ===
+  // ENTRY BUTTON
   if (digitalRead(BUTTON_PIN) == LOW) {
     delay(200);
-    Serial.println("Button pressed - dispensing next card and opening gate...");
+    Serial.println(F("Button pressed"));
 
     int allowedAvailable = queueSize - capacityHold;
     if (allowedAvailable <= 0) {
-      Serial.println("No available card/slot (capacity held).");
+      Serial.println(F("No available card/slot"));
       delay(2000);
     } else {
-      // Skip indices that are reserved/held by host (reservedStatus[i])
       int nextCard = -1;
       for (int attempt = 0; attempt < 4; attempt++) {
         int candidate = popNextCardFromQueue();
         if (candidate == -1) break;
         if (reservedStatus[candidate]) {
-          // Put back to end of queue as it's held
           pushReturnedCardToQueue(candidate);
           continue;
         }
         nextCard = candidate;
         break;
       }
-      if (nextCard != -1) {
-      // Begin session for this card index
-      counting[nextCard] = true;
-      startTime[nextCard] = millis();
-
-      // Log assigned card (1-based for display)
-      Serial.print("Dispensed Card ");
-      Serial.println(nextCard + 1);
       
-      // Report card dispensed to server for queue sync
-      Serial.print("DISP:");
-      Serial.println(nextCard + 1);
+      if (nextCard != -1) {
+        counting[nextCard] = true;
+        startTime[nextCard] = millis();
 
-      // Physically dispense the card
-      dispenserServo.write(90);
-      delay(700);
-      dispenserServo.write(0);
+        Serial.print(F("Dispensed Card "));
+        Serial.println(nextCard + 1);
+        
+        Serial.print(F("DISP:"));
+        Serial.println(nextCard + 1);
 
-      // Open entry gate
-      entryServo.write(90);
-      delay(5000);
-      entryServo.write(0);
-      Serial.println("Entry gate closed.");
+        dispenserServo.write(90);
+        delay(700);
+        dispenserServo.write(0);
 
-      // LCD: suppress non-payment messages
-      delay(1000);
-      return;
+        entryServo.write(90);
+        delay(5000);
+        entryServo.write(0);
+        Serial.println(F("Entry gate closed"));
+
+        delay(1000);
+        return;
       }
 
-      Serial.println("No available card/slot.");
+      Serial.println(F("No available card/slot"));
       delay(2000);
     }
   }
 
-  // === RFID SCAN ===
+  // RFID SCAN
   uint8_t success;
   uint8_t uid[7];
   uint8_t uidLength;
   success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 100);
 
   if (success) {
+    String rfidString = uidToString(uid, uidLength);
+    
+    if (rfidString != lastScannedRFID || (millis() - lastRFIDScanTime) > 2000) {
+      lastScannedRFID = rfidString;
+      lastRFIDScanTime = millis();
+      
+      if (getReservedCustomerIndex(rfidString) != -1) {
+        handleVIPRFIDScan(rfidString);
+        return;
+      }
+    }
+    
     int cardIndex = matchCard(uid);
 
     if (cardIndex != -1 && counting[cardIndex]) {
       unsigned long totalTime = (millis() - startTime[cardIndex]) / 1000;
       counting[cardIndex] = false;
 
-      paymentDue[cardIndex] = ((totalTime + 4) / 5) * 5; // ₱5 per 5 sec
+      paymentDue[cardIndex] = ((totalTime + 4) / 5) * 5;
       coinsInserted[cardIndex] = 0;
       awaitingPayment[cardIndex] = true;
 
-      Serial.print("Card ");
+      Serial.print(F("Card "));
       Serial.print(cardIndex + 1);
-      Serial.print(" stayed ");
+      Serial.print(F(" stayed "));
       Serial.print(totalTime);
-      Serial.print("s -> Pay ");
+      Serial.print(F("s -> Pay "));
       Serial.print(paymentDue[cardIndex]);
-      Serial.println(" PHP");
+      Serial.println(F(" PHP"));
 
-      // If no one is currently paying, show this card
       if (currentPayingIndex == -1) {
         currentPayingIndex = cardIndex;
       } else {
-        Serial.print("Queued for payment: Card ");
+        Serial.print(F("Queued for payment: Card "));
         Serial.println(cardIndex + 1);
       }
     }
   }
 
-  // === PAYMENT PROCESSING (non-blocking) ===
+  // PAYMENT PROCESSING
   if (currentPayingIndex != -1) {
     int idx = currentPayingIndex;
     int coinsNeeded = paymentDue[idx] / 5;
-    int remaining = (coinsNeeded - coinsInserted[idx]) * 5;
-    if (remaining < 0) remaining = 0;
-
-    // Payment info now handled by updateLCD() function
 
     if (coinsInserted[idx] >= coinsNeeded) {
-      
-     // Show thank you on OLED
       oled.clear();
       oled.setFont(FONT8X16);
       oled.setCursor(0, 0);
-      oled.print("Thank You!");
+      oled.print(F("Thank You!"));
       oled.setCursor(0, 2);
-      oled.print("Payment OK");
+      oled.print(F("Payment OK"));
       
-      delay(2000); // Show thank you for 2 seconds
-      
+      delay(2000);
       oled.clear();
 
-      Serial.print("Card ");
+      Serial.print(F("Card "));
       Serial.print(idx + 1);
-      Serial.println(" payment complete.");
+      Serial.println(F(" payment complete"));
       delay(1000);
 
-      // Exit gate handling
       exitServo.write(90);
       delay(5000);
       exitServo.write(0);
-      Serial.println("Exit gate closed.");
+      Serial.println(F("Exit gate closed"));
 
-      // Clear payment state
       awaitingPayment[idx] = false;
       paymentDue[idx] = 0;
       coinsInserted[idx] = 0;
       currentPayingIndex = -1;
 
-      // Returned card goes to the end of the queue
       pushReturnedCardToQueue(idx);
 
-      // Clear reservation overlay for this spot and inform host
       reservedStatus[idx] = false;
-      Serial.print("PAID:");
+      Serial.print(F("PAID:"));
       Serial.println(idx + 1);
 
-      // Switch to next queued card if any
       for (int i = 0; i < numCards; i++) {
         if (awaitingPayment[i]) {
           currentPayingIndex = i;
@@ -575,5 +678,5 @@ void loop() {
     }
   }
 
-  delay(500); // update interval
+  delay(100); // Shorter delay for better responsiveness
 }
