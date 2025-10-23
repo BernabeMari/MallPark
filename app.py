@@ -657,10 +657,43 @@ def api_reserve():
     if mine:
         return jsonify({"success": True})
 
+    # TIME-BASED RESERVATION POLICY: 1-hour rule
+    is_advance_reservation = False
+    if arrival_ts > 0:
+        time_until_arrival = arrival_ts - now
+        one_hour = 60 * 60  # 1 hour in seconds
+        
+        # Check if reservation is less than 1 hour ahead
+        if time_until_arrival < one_hour:
+            # For last-minute reservations, check if parking is full
+            available_spots = sum(1 for s in spots if not s.get("reserved_by"))
+            if available_spots == 0:
+                return jsonify({
+                    "success": False, 
+                    "message": "Reservation rejected: Less than 1 hour notice and parking is full. Please book at least 1 hour in advance."
+                }), 400
+        else:
+            # This is an advance reservation (more than 1 hour ahead)
+            is_advance_reservation = True
+    
     # Get next card from sequential queue (mirrors Arduino behavior)
     next_card = pop_next_card_from_queue()
-    if next_card == -1:
+    
+    # For advance reservations, allow even if no cards currently available
+    if next_card == -1 and not is_advance_reservation:
         return jsonify({"success": False, "message": "No available cards"}), 400
+    
+    # For advance reservations with no cards, assign to next available spot
+    if next_card == -1 and is_advance_reservation:
+        # Find next available spot for advance reservation
+        next_card = -1
+        for i in range(4):
+            if not spots[i].get("reserved_by"):
+                next_card = i
+                break
+        
+        if next_card == -1:
+            return jsonify({"success": False, "message": "No available spots for advance reservation"}), 400
 
     # Assign the next card in queue to the user
     spot = spots[next_card]  # next_card is 0-based, spots are 1-based
@@ -878,5 +911,4 @@ if __name__ == "__main__":
     ok, msg = connect_arduino()
     print(f"Arduino: {msg}")
     app.run(debug=True, host="0.0.0.0", port=5000, use_reloader=False)
-
 
