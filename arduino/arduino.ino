@@ -70,6 +70,7 @@ bool oledAvailable = false;
 bool awaitingPayment[4] = {false, false, false, false};
 bool reservedStatus[4] = {false, false, false, false};
 int capacityHold = 0;
+bool isWalkInCustomer[4] = {false, false, false, false}; // Track if slot is used by walk-in during cap hold
 
 // ============================
 // Card dispense queue
@@ -220,6 +221,9 @@ void updateServoStateMachine() {
           currentPayingIndex = -1;
 
           pushReturnedCardToQueue(idx);
+          
+          // Clear walk-in flag
+          isWalkInCustomer[idx] = false;
 
           Serial.print(F("PAID:"));
           Serial.println(idx + 1);
@@ -627,6 +631,7 @@ void handleVIPRFIDScan(String rfid) {
       }
       
       slotVIPCard[assignedSlot] = "";
+      isWalkInCustomer[assignedSlot] = false;
       lastRFIDProcess = millis();
       return;
     }
@@ -637,13 +642,14 @@ void handleVIPRFIDScan(String rfid) {
     Serial.print(F("VIP RFID: Card UID - "));
     Serial.println(rfid);
     
-    int allowedAvailable = queueSize - capacityHold;
-    if (allowedAvailable <= 0) {
-      Serial.println(F("VIP RFID: No available card/slot (capacity held)"));
-      return;
-    }
+    Serial.print(F("Queue size: "));
+    Serial.print(queueSize);
+    Serial.print(F(", Capacity hold: "));
+    Serial.println(capacityHold);
 
     int nextCard = -1;
+    
+    // VIP customer gets next card from queue (bypasses capacity hold)
     for (int attempt = 0; attempt < queueSize; attempt++) {
       int pos = (queueHead + attempt) % 4;
       int candidate = availableQueue[pos];
@@ -655,19 +661,29 @@ void handleVIPRFIDScan(String rfid) {
           availableQueue[curPos] = availableQueue[nextPos];
         }
         queueSize--;
+        Serial.println(F("VIP getting reserved card"));
         break;
+      }
+    }
+    
+    // If no cards in queue, check for any physically available slot
+    if (nextCard == -1) {
+      Serial.println(F("Queue empty, checking for physically available slots..."));
+      for (int i = 0; i < 4; i++) {
+        if (!reservedStatus[i] && !counting[i] && !awaitingPayment[i]) {
+          nextCard = i;
+          removeCardFromQueueIfPresent(i);
+          Serial.print(F("VIP taking physically available slot "));
+          Serial.println(i + 1);
+          break;
+        }
       }
     }
 
     if (nextCard != -1) {
       counting[nextCard] = true;
       startTime[nextCard] = millis();
-      
-      if (capacityHold > 0) {
-        capacityHold--;
-        Serial.print(F("VIP arrival: capacity hold reduced to "));
-        Serial.println(capacityHold);
-      }
+      isWalkInCustomer[nextCard] = false;
 
       slotVIPCard[nextCard] = rfid;
       
@@ -680,7 +696,7 @@ void handleVIPRFIDScan(String rfid) {
       
       lastRFIDProcess = millis();
     } else {
-      Serial.println(F("VIP RFID: No available card/slot"));
+      Serial.println(F("VIP RFID: All slots physically occupied. Please wait."));
     }
   }
 }
@@ -728,9 +744,18 @@ void loop() {
     Serial.println(F("Button pressed"));
 
     int allowedAvailable = queueSize - capacityHold;
+    
     if (allowedAvailable <= 0) {
-      Serial.println(F("No available card/slot"));
+      Serial.print(F("Walk-in DENIED - No available slots"));
+      Serial.print(F(" (Queue: "));
+      Serial.print(queueSize);
+      Serial.print(F(", Reserved: "));
+      Serial.print(capacityHold);
+      Serial.println(F(")"));
+      Serial.println(F("Slots are reserved for upcoming customers."));
+      // Do not dispense anything - walk-in is rejected
     } else {
+      // Walk-in is allowed - get next card from queue
       int nextCard = -1;
       for (int attempt = 0; attempt < queueSize; attempt++) {
         int pos = (queueHead + attempt) % 4;
@@ -750,6 +775,11 @@ void loop() {
       if (nextCard != -1) {
         counting[nextCard] = true;
         startTime[nextCard] = millis();
+        isWalkInCustomer[nextCard] = false;
+        
+        Serial.print(F("Walk-in dispensed Card "));
+        Serial.println(nextCard + 1);
+        
         startCardDispense(nextCard);
       } else {
         Serial.println(F("No available card/slot"));
@@ -791,6 +821,7 @@ void loop() {
           }
           
           slotVIPCard[cardIndex] = "";
+          isWalkInCustomer[cardIndex] = false;
           lastRFIDProcess = millis();
         }
       } else {
