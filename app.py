@@ -911,4 +911,3 @@ if __name__ == "__main__":
     ok, msg = connect_arduino()
     print(f"Arduino: {msg}")
     app.run(debug=True, host="0.0.0.0", port=5000, use_reloader=False)
-
